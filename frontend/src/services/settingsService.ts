@@ -1,38 +1,94 @@
-import socket from "../socket/socket";
-import { appendAssistantMessage } from "../state/chatSlice";
-import { setInitialized } from "../state/taskSlice";
-import store from "../store";
+import { setInitialized } from "#/state/taskSlice";
+import store from "#/store";
+import ActionType from "#/types/ActionType";
+import { SupportedSettings } from "#/types/ConfigType";
+import { setByKey } from "#/state/settingsSlice";
+import toast from "#/utils/toast";
+import Socket from "./socket";
 
-export const MODELS = [
-  "gpt-3.5-turbo-1106",
-  "gpt-4-0125-preview",
-  "claude-3-haiku-20240307",
-  "claude-3-sonnet-20240229",
-  "claude-3-sonnet-20240307",
-];
+export type Settings = { [key: string]: string };
 
-export type Model = (typeof MODELS)[number];
+export async function fetchModels() {
+  const response = await fetch(`/api/litellm-models`);
+  return response.json();
+}
 
-export const AGENTS = ["LangchainsAgent", "CodeActAgent"];
+export async function fetchAgents() {
+  const response = await fetch(`/api/agents`);
+  return response.json();
+}
 
-export type Agent = (typeof AGENTS)[number];
+// all available settings in the frontend
+// TODO: add the values to i18n to support multi languages
+const DISPLAY_MAP: { [key: string]: string } = {
+  LLM_MODEL: "model",
+  AGENT: "agent",
+  LANGUAGE: "language",
+};
 
-function changeSetting(setting: string, value: string): void {
-  const event = { action: "initialize", args: { [setting]: value } };
+const DEFAULT_SETTINGS: Settings = {
+  LLM_MODEL: "gpt-3.5-turbo",
+  AGENT: "MonologueAgent",
+  LANGUAGE: "en",
+};
+
+export const getSettingOrDefault = (key: string): string => {
+  const value = localStorage.getItem(key);
+  return value || DEFAULT_SETTINGS[key];
+};
+
+export const getCurrentSettings = (): Settings => ({
+  LLM_MODEL: getSettingOrDefault("LLM_MODEL"),
+  AGENT: getSettingOrDefault("AGENT"),
+  LANGUAGE: getSettingOrDefault("LANGUAGE"),
+});
+
+// Function to merge and update settings
+export const getUpdatedSettings = (
+  newSettings: Settings,
+  currentSettings: Settings,
+) => {
+  const updatedSettings: Settings = {};
+  SupportedSettings.forEach((setting) => {
+    if (
+      newSettings[setting] !== currentSettings[setting] &&
+      !!newSettings[setting] // check if the value is not empty/undefined
+    ) {
+      updatedSettings[setting] = newSettings[setting];
+    }
+  });
+  return updatedSettings;
+};
+
+export const dispatchSettings = (updatedSettings: Record<string, string>) => {
+  let i = 0;
+  for (const [key, value] of Object.entries(updatedSettings)) {
+    store.dispatch(setByKey({ key, value }));
+    if (key in DISPLAY_MAP) {
+      setTimeout(() => {
+        toast.settingsChanged(`Set ${DISPLAY_MAP[key]} to "${value}"`);
+      }, i * 500);
+      i += 1;
+    }
+  }
+};
+
+export const initializeAgent = () => {
+  const event = { action: ActionType.INIT, args: getCurrentSettings() };
   const eventString = JSON.stringify(event);
-  socket.send(eventString);
   store.dispatch(setInitialized(false));
-  store.dispatch(appendAssistantMessage(`Changed ${setting} to "${value}"`));
-}
+  Socket.send(eventString);
+};
 
-export function changeModel(model: Model): void {
-  changeSetting("model", model);
-}
+// Save and send settings to the server
+export function saveSettings(newSettings: Settings): void {
+  const currentSettings = getCurrentSettings();
+  const updatedSettings = getUpdatedSettings(newSettings, currentSettings);
 
-export function changeAgent(agent: Agent): void {
-  changeSetting("agent_cls", agent);
-}
+  if (Object.keys(updatedSettings).length === 0) {
+    return;
+  }
 
-export function changeDirectory(directory: string): void {
-  changeSetting("directory", directory);
+  dispatchSettings(updatedSettings);
+  initializeAgent();
 }

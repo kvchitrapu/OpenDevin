@@ -1,19 +1,21 @@
-name: Build and publish multi-arch container images
+name: Publish Docker Image
 
 on:
   push:
-    branches: [ main ]
   workflow_dispatch:
     inputs:
       reason:
-        description: 'Why manual trigger?'
-        required: false
+        description: 'Reason for manual trigger'
+        required: true
         default: ''
 
 jobs:
   ghcr_build_and_push:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event.inputs.reason != ''
+    strategy:
+      matrix:
+        image: ["app", "evaluation", "sandbox"]
 
     steps:
       - name: checkout
@@ -28,18 +30,11 @@ jobs:
 
       - name: Log-in to ghcr.io
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        
+      - name: Delete huge unnecessary tools folder
+        run: rm -rf /opt/hostedtoolcache
 
-      - name: Build and push multi-arch container images
+      - name: Build and push ${{ matrix.image }}
         run: |
-          # set env for fork repo
-          DOCKER_BUILD_ORG=$(echo "${{ github.repository }}" | tr '[A-Z]' '[a-z]' | cut -d '/' -f 1)
-          # Find directories containing Dockerfile but not containing .dockerfileignore
-          while IFS= read -r dockerfile_dir; do
-            # Check if .dockerfileignore exists in the directory
-            if [ ! -f "$dockerfile_dir/.dockerfileignore" ]; then
-              # Change directory and execute 'make all'
-              pushd "$dockerfile_dir" > /dev/null
-              make all DOCKER_BUILD_ORG=$DOCKER_BUILD_ORG
-              popd > /dev/null
-            fi
-          done < <(find . -type f -name Dockerfile -exec dirname {} \; | sort -u)
+          ORG_NAME=$(echo "${{ github.repository }}" | tr '[A-Z]' '[a-z]' | cut -d '/' -f 1)
+          ./containers/build.sh ${{ matrix.image }} $ORG_NAME --push
